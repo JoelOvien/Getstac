@@ -1,6 +1,6 @@
 # Project Structure
 
-This document outlines the complete structure of the Go XLSX Upload API project.
+This document outlines the complete structure of the project.
 
 ```
 go-xlsx-api/

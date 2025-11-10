@@ -7,7 +7,6 @@ import (
 	"github.com/joelovien/go-xlsx-api/internal/models"
 )
 
-// APIKeyAuth creates a middleware for API key authentication
 func APIKeyAuth(apiKey string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// Timeout creates a middleware that adds a timeout to the request context
 func Timeout(timeout time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

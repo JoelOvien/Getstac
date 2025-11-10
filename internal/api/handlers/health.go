@@ -7,15 +7,12 @@ import (
 	"github.com/joelovien/go-xlsx-api/internal/models"
 )
 
-// HealthHandler handles health check requests
 type HealthHandler struct{}
 
-// NewHealthHandler creates a new health handler
 func NewHealthHandler() *HealthHandler {
 	return &HealthHandler{}
 }
 
-// Handle processes the health check request
 func (h *HealthHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	response := models.HealthResponse{
 		Status: "ok",

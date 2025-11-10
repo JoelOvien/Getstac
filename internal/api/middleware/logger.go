@@ -7,7 +7,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// responseWriter wraps http.ResponseWriter to capture status code
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -32,19 +31,15 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// Logger creates a logging middleware
 func Logger(logger *zerolog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 
-			// Wrap response writer to capture status code
 			rw := newResponseWriter(w)
 
-			// Process request
 			next.ServeHTTP(rw, r)
 
-			// Log request details
 			logger.Info().
 				Str("method", r.Method).
 				Str("path", r.URL.Path).

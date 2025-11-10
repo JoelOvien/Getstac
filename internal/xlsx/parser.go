@@ -12,19 +12,16 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-// Parser handles XLSX file parsing
 type Parser struct {
 	workerPoolSize int
 }
 
-// NewParser creates a new XLSX parser
 func NewParser(workerPoolSize int) *Parser {
 	return &Parser{
 		workerPoolSize: workerPoolSize,
 	}
 }
 
-// ParseResult contains the results of parsing an XLSX file
 type ParseResult struct {
 	UploadID     string
 	Records      []models.Record
@@ -33,16 +30,13 @@ type ParseResult struct {
 	Errors       []string
 }
 
-// Parse parses an XLSX file from a reader
 func (p *Parser) Parse(ctx context.Context, reader io.Reader, uploadID string) (*ParseResult, error) {
-	// Read the file into excelize
 	f, err := excelize.OpenReader(reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open xlsx file: %w", err)
 	}
 	defer f.Close()
 
-	// Get the first sheet
 	sheets := f.GetSheetList()
 	if len(sheets) == 0 {
 		return nil, fmt.Errorf("xlsx file has no sheets")
@@ -58,7 +52,6 @@ func (p *Parser) Parse(ctx context.Context, reader io.Reader, uploadID string) (
 		return nil, fmt.Errorf("xlsx file has no data")
 	}
 
-	// First row should be headers
 	if len(rows) < 2 {
 		return nil, fmt.Errorf("xlsx file must have at least header row and one data row")
 	}
@@ -68,7 +61,6 @@ func (p *Parser) Parse(ctx context.Context, reader io.Reader, uploadID string) (
 		return nil, fmt.Errorf("xlsx file has no headers")
 	}
 
-	// Validate headers are not empty
 	for i, header := range headers {
 		if strings.TrimSpace(header) == "" {
 			return nil, fmt.Errorf("header at column %d is empty", i+1)
@@ -83,7 +75,6 @@ func (p *Parser) Parse(ctx context.Context, reader io.Reader, uploadID string) (
 		Errors:   make([]string, 0),
 	}
 
-	// Create a channel for processing rows with bounded concurrency
 	type rowJob struct {
 		index int
 		row   []string
@@ -144,7 +135,6 @@ func (p *Parser) Parse(ctx context.Context, reader io.Reader, uploadID string) (
 	return result, nil
 }
 
-// parseRow parses a single row into a structured record
 func (p *Parser) parseRow(headers []string, row []string) models.ParsedRow {
 	// Skip completely empty rows
 	if p.isEmptyRow(row) {
@@ -174,7 +164,6 @@ func (p *Parser) parseRow(headers []string, row []string) models.ParsedRow {
 	}
 }
 
-// isEmptyRow checks if a row is completely empty
 func (p *Parser) isEmptyRow(row []string) bool {
 	for _, cell := range row {
 		if strings.TrimSpace(cell) != "" {
@@ -184,7 +173,6 @@ func (p *Parser) isEmptyRow(row []string) bool {
 	return true
 }
 
-// CreatedAt helper for ParseResult
 func (pr *ParseResult) CreatedAt() time.Time {
 	return time.Now()
 }
