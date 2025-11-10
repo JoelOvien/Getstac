@@ -43,7 +43,8 @@ func (p *Parser) Parse(ctx context.Context, reader io.Reader, uploadID string) (
 	}
 
 	sheetName := sheets[0]
-	rows, err := f.GetRows(sheetName)
+
+	rows, err := f.GetRows(sheetName, excelize.Options{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to read rows from sheet %s: %w", sheetName, err)
 	}
@@ -56,19 +57,41 @@ func (p *Parser) Parse(ctx context.Context, reader io.Reader, uploadID string) (
 		return nil, fmt.Errorf("xlsx file must have at least header row and one data row")
 	}
 
-	headers := rows[0]
-	if len(headers) == 0 {
+	
+	headerRowIndex := 0
+	dataStartIndex := 1
+
+	if len(rows[0]) == 1 && len(rows) > 8 {
+		headerRowIndex = 7
+		dataStartIndex = 8
+	}
+
+	if headerRowIndex >= len(rows) {
+		return nil, fmt.Errorf("xlsx file does not have enough rows")
+	}
+
+	if len(rows[headerRowIndex]) == 0 {
 		return nil, fmt.Errorf("xlsx file has no headers")
 	}
 
-	for i, header := range headers {
-		if strings.TrimSpace(header) == "" {
-			return nil, fmt.Errorf("header at column %d is empty", i+1)
+	headers := make([]string, len(rows[headerRowIndex]))
+	for i, cell := range rows[headerRowIndex] {
+		headers[i] = strings.TrimSpace(cell)
+	}
+
+	hasHeader := false
+	for _, header := range headers {
+		if header != "" {
+			hasHeader = true
+			break
 		}
 	}
 
-	// Process data rows
-	dataRows := rows[1:]
+	if !hasHeader {
+		return nil, fmt.Errorf("xlsx file has no valid headers")
+	}
+
+	dataRows := rows[dataStartIndex:]
 	result := &ParseResult{
 		UploadID: uploadID,
 		Records:  make([]models.Record, 0, len(dataRows)),
@@ -91,24 +114,25 @@ func (p *Parser) Parse(ctx context.Context, reader io.Reader, uploadID string) (
 				case <-ctx.Done():
 					return
 				default:
-					parsed := p.parseRow(headers, job.row)
+					parsed := p.parseRow(headers, job.row, job.index)
 					results <- parsed
 				}
 			}
 		}()
 	}
 
-	// Send jobs
 	for i, row := range dataRows {
+		normalizedRow := make([]string, len(headers))
+		copy(normalizedRow, row)
+
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case jobs <- rowJob{index: i, row: row}:
+		case jobs <- rowJob{index: i, row: normalizedRow}:
 		}
 	}
 	close(jobs)
 
-	// Collect results
 	for i := 0; i < len(dataRows); i++ {
 		select {
 		case <-ctx.Done():
@@ -135,7 +159,7 @@ func (p *Parser) Parse(ctx context.Context, reader io.Reader, uploadID string) (
 	return result, nil
 }
 
-func (p *Parser) parseRow(headers []string, row []string) models.ParsedRow {
+func (p *Parser) parseRow(headers []string, row []string, transactionIndex int) models.ParsedRow {
 	// Skip completely empty rows
 	if p.isEmptyRow(row) {
 		return models.ParsedRow{
@@ -146,7 +170,8 @@ func (p *Parser) parseRow(headers []string, row []string) models.ParsedRow {
 
 	data := make(map[string]interface{})
 
-	// Map row values to headers
+	data["Transaction Index"] = transactionIndex + 1
+
 	for i, header := range headers {
 		var value interface{}
 		if i < len(row) {
@@ -155,7 +180,10 @@ func (p *Parser) parseRow(headers []string, row []string) models.ParsedRow {
 				value = cellValue
 			}
 		}
-		data[header] = value
+		// Skip empty header names
+		if strings.TrimSpace(header) != "" {
+			data[header] = value
+		}
 	}
 
 	return models.ParsedRow{
