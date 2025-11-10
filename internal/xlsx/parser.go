@@ -1,0 +1,190 @@
+package xlsx
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/joelovien/go-xlsx-api/internal/models"
+	"github.com/xuri/excelize/v2"
+)
+
+// Parser handles XLSX file parsing
+type Parser struct {
+	workerPoolSize int
+}
+
+// NewParser creates a new XLSX parser
+func NewParser(workerPoolSize int) *Parser {
+	return &Parser{
+		workerPoolSize: workerPoolSize,
+	}
+}
+
+// ParseResult contains the results of parsing an XLSX file
+type ParseResult struct {
+	UploadID     string
+	Records      []models.Record
+	RowsAccepted int
+	RowsRejected int
+	Errors       []string
+}
+
+// Parse parses an XLSX file from a reader
+func (p *Parser) Parse(ctx context.Context, reader io.Reader, uploadID string) (*ParseResult, error) {
+	// Read the file into excelize
+	f, err := excelize.OpenReader(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open xlsx file: %w", err)
+	}
+	defer f.Close()
+
+	// Get the first sheet
+	sheets := f.GetSheetList()
+	if len(sheets) == 0 {
+		return nil, fmt.Errorf("xlsx file has no sheets")
+	}
+
+	sheetName := sheets[0]
+	rows, err := f.GetRows(sheetName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read rows from sheet %s: %w", sheetName, err)
+	}
+
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("xlsx file has no data")
+	}
+
+	// First row should be headers
+	if len(rows) < 2 {
+		return nil, fmt.Errorf("xlsx file must have at least header row and one data row")
+	}
+
+	headers := rows[0]
+	if len(headers) == 0 {
+		return nil, fmt.Errorf("xlsx file has no headers")
+	}
+
+	// Validate headers are not empty
+	for i, header := range headers {
+		if strings.TrimSpace(header) == "" {
+			return nil, fmt.Errorf("header at column %d is empty", i+1)
+		}
+	}
+
+	// Process data rows
+	dataRows := rows[1:]
+	result := &ParseResult{
+		UploadID: uploadID,
+		Records:  make([]models.Record, 0, len(dataRows)),
+		Errors:   make([]string, 0),
+	}
+
+	// Create a channel for processing rows with bounded concurrency
+	type rowJob struct {
+		index int
+		row   []string
+	}
+
+	jobs := make(chan rowJob, len(dataRows))
+	results := make(chan models.ParsedRow, len(dataRows))
+
+	// Start worker pool
+	for w := 0; w < p.workerPoolSize; w++ {
+		go func() {
+			for job := range jobs {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					parsed := p.parseRow(headers, job.row)
+					results <- parsed
+				}
+			}
+		}()
+	}
+
+	// Send jobs
+	for i, row := range dataRows {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case jobs <- rowJob{index: i, row: row}:
+		}
+	}
+	close(jobs)
+
+	// Collect results
+	for i := 0; i < len(dataRows); i++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case parsed := <-results:
+			if parsed.Valid {
+				record := models.Record{
+					ID:        uuid.New().String(),
+					UploadID:  uploadID,
+					Data:      parsed.Data,
+					CreatedAt: result.CreatedAt(),
+				}
+				result.Records = append(result.Records, record)
+				result.RowsAccepted++
+			} else {
+				result.RowsRejected++
+				if parsed.Error != "" {
+					result.Errors = append(result.Errors, parsed.Error)
+				}
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// parseRow parses a single row into a structured record
+func (p *Parser) parseRow(headers []string, row []string) models.ParsedRow {
+	// Skip completely empty rows
+	if p.isEmptyRow(row) {
+		return models.ParsedRow{
+			Valid: false,
+			Error: "empty row",
+		}
+	}
+
+	data := make(map[string]interface{})
+
+	// Map row values to headers
+	for i, header := range headers {
+		var value interface{}
+		if i < len(row) {
+			cellValue := strings.TrimSpace(row[i])
+			if cellValue != "" {
+				value = cellValue
+			}
+		}
+		data[header] = value
+	}
+
+	return models.ParsedRow{
+		Data:  data,
+		Valid: true,
+	}
+}
+
+// isEmptyRow checks if a row is completely empty
+func (p *Parser) isEmptyRow(row []string) bool {
+	for _, cell := range row {
+		if strings.TrimSpace(cell) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// CreatedAt helper for ParseResult
+func (pr *ParseResult) CreatedAt() time.Time {
+	return time.Now()
+}
